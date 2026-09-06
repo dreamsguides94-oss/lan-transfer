@@ -9,6 +9,10 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
+// needed so req.ip / x-forwarded-for reflect the real visitor when this
+// runs behind a hosting provider's proxy (Render, Railway, Fly.io, etc.)
+app.set('trust proxy', true);
+
 app.use(express.static('public'));
 
 function getLanAddress(port) {
@@ -31,10 +35,15 @@ function openBrowser(url) {
   exec(cmd, () => {}); // best-effort; ignore failures (e.g. headless servers)
 }
 
-// exposed so the page can show the LAN address + a QR code to scan on a
-// phone, instead of the user having to read it off the terminal
+// Works two ways:
+//  - run locally (e.g. via the .bat launcher): returns this machine's LAN
+//    IP, so a QR/link on the page opens correctly on another device on
+//    the same Wi-Fi.
+//  - deployed publicly (Render/Railway/etc.): returns the public URL the
+//    visitor actually used, from the request itself.
 app.get('/api/network-info', async (req, res) => {
-  const url = getLanAddress(PORT);
+  const isLocalHost = /^(localhost|127\.0\.0\.1|::1)/.test(req.hostname);
+  const url = isLocalHost ? getLanAddress(PORT) : `${req.protocol}://${req.get('host')}`;
   try {
     const qrDataUrl = await qrcode.toDataURL(url, { margin: 1, width: 220 });
     res.json({ url, qrDataUrl });
@@ -50,23 +59,31 @@ function randomName() {
   return ADJ[Math.floor(Math.random() * ADJ.length)] + ' ' + ANIMAL[Math.floor(Math.random() * ANIMAL.length)];
 }
 
-// All devices on the LAN join one shared room. Since this server only
-// listens on the local network, anyone who can reach it is trusted to be
-// on the same network.
-const ROOM = 'lan';
-const peers = {}; // socket.id -> { id, name }
+// Anyone can open this site — but for privacy, devices are only grouped
+// with others on the SAME network (same public IP), exactly like
+// Snapdrop. A stranger elsewhere on the internet never sees your devices.
+function networkKeyFor(socket) {
+  const forwarded = socket.handshake.headers['x-forwarded-for'];
+  const ip = (forwarded ? forwarded.split(',')[0].trim() : socket.handshake.address) || 'local';
+  return 'net-' + ip;
+}
+
+const rooms = {}; // roomKey -> { socketId -> { id, name } }
 
 io.on('connection', (socket) => {
+  const room = networkKeyFor(socket);
   const name = randomName();
-  peers[socket.id] = { id: socket.id, name };
-  socket.join(ROOM);
+  rooms[room] = rooms[room] || {};
+  rooms[room][socket.id] = { id: socket.id, name };
+  socket.join(room);
+  socket.data.room = room;
 
-  // tell the new peer who's already here
+  // tell the new peer who's already here (on their network only)
   socket.emit('welcome', { id: socket.id, name });
-  socket.emit('peers', Object.values(peers).filter(p => p.id !== socket.id));
+  socket.emit('peers', Object.values(rooms[room]).filter((p) => p.id !== socket.id));
 
-  // tell everyone else about the new peer
-  socket.to(ROOM).emit('peer-joined', peers[socket.id]);
+  // tell everyone else on the same network about the new peer
+  socket.to(room).emit('peer-joined', rooms[room][socket.id]);
 
   // relay WebRTC signaling messages (offer/answer/ICE candidates) between
   // two specific peers — the server never sees file contents, only this
@@ -85,8 +102,12 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    delete peers[socket.id];
-    socket.to(ROOM).emit('peer-left', { id: socket.id });
+    const r = socket.data.room;
+    if (rooms[r]) {
+      delete rooms[r][socket.id];
+      if (Object.keys(rooms[r]).length === 0) delete rooms[r];
+    }
+    socket.to(r).emit('peer-left', { id: socket.id });
   });
 });
 
