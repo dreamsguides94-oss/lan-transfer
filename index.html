@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>LAN Transfer</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>LAN Transfer</h1>
+      <p class="subtitle">Direct device-to-device transfer over your local network — no internet, no compression.</p>
+      <p class="me">You are: <span id="myName">connecting…</span></p>
+    </header>
+
+    <main>
+      <section class="connect-panel">
+        <div class="connect-info">
+          <h2>Connect another device</h2>
+          <p class="connect-hint">Open this address in a browser on the other device — or scan the code with a phone camera.</p>
+          <div class="url-row">
+            <code id="lanUrl">loading…</code>
+            <button id="copyUrlBtn" class="copy-btn" title="Copy link">Copy</button>
+          </div>
+        </div>
+        <img id="qrImage" class="qr-image" alt="QR code to open this app on another device" />
+      </section>
+
+      <section id="dropzone" class="dropzone">
+        <p>Drag &amp; drop files here, or click to choose</p>
+        <input type="file" id="fileInput" multiple hidden />
+      </section>
+
+      <section class="peers">
+        <h2>Devices on this network</h2>
+        <div id="peerList" class="peer-list">
+          <p class="empty-state">Waiting for other devices to join…</p>
+        </div>
+      </section>
+
+      <section class="transfers">
+        <h2>Transfers</h2>
+        <div id="transferList" class="transfer-list"></div>
+      </section>
+    </main>
+  </div>
+
+  <!-- incoming file prompt -->
+  <div id="incomingModal" class="modal hidden">
+    <div class="modal-box">
+      <p id="incomingText"></p>
+      <div class="modal-actions">
+        <button id="acceptBtn" class="btn primary">Accept</button>
+        <button id="declineBtn" class="btn">Decline</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
