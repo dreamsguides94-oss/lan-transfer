@@ -1,5 +1,11 @@
 const socket = io();
 
+// register the service worker — required by Chrome/Edge to make this
+// installable as a desktop app with its own icon
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+
 const myNameEl = document.getElementById('myName');
 const lanUrlEl = document.getElementById('lanUrl');
 const qrImageEl = document.getElementById('qrImage');
@@ -12,6 +18,7 @@ const incomingModal = document.getElementById('incomingModal');
 const incomingText = document.getElementById('incomingText');
 const acceptBtn = document.getElementById('acceptBtn');
 const declineBtn = document.getElementById('declineBtn');
+const clearHistoryBtn = document.getElementById('clearHistoryBtn');
 
 const CHUNK_SIZE = 64 * 1024;
 const BUFFER_LOW_THRESHOLD = 1 * 1024 * 1024;
@@ -24,6 +31,58 @@ const channels = {}; // peerId -> RTCDataChannel
 let pendingFiles = []; // File[] queued to send on next click
 let pendingIncoming = null; // { from, meta } awaiting accept/decline
 const incomingBuffers = {}; // peerId -> { name, size, mime, chunks[] }
+
+// ---------- transfer history (persisted on this device/browser) ----------
+
+const HISTORY_KEY = 'lanTransferHistory';
+const HISTORY_LIMIT = 50;
+
+function loadHistory() {
+  try {
+    return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveHistoryItem(item) {
+  const history = loadHistory();
+  history.unshift(item);
+  if (history.length > HISTORY_LIMIT) history.length = HISTORY_LIMIT;
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+  } catch (e) {
+    /* storage full or unavailable — history just won't persist, no big deal */
+  }
+}
+
+function historyStatusText(item) {
+  const when = new Date(item.time).toLocaleString();
+  const verb = item.direction === 'sent' ? 'Sent to' : 'Received from';
+  return `${verb} ${item.peer} · ${when}`;
+}
+
+function renderHistoryOnLoad() {
+  const history = loadHistory();
+  // oldest first, so the newest ends up on top (addTransferRow prepends)
+  history
+    .slice()
+    .reverse()
+    .forEach((item) => {
+      const row = addTransferRow(item.name, historyStatusText(item), 'done');
+      updateTransferRow(row, 100, historyStatusText(item), 'done');
+    });
+  if (!transferListEl.children.length) {
+    transferListEl.innerHTML = '<p class="empty-state">No transfers yet</p>';
+  }
+}
+
+clearHistoryBtn.addEventListener('click', () => {
+  localStorage.removeItem(HISTORY_KEY);
+  transferListEl.innerHTML = '<p class="empty-state">No transfers yet</p>';
+});
+
+renderHistoryOnLoad();
 
 // ---------- peer list UI ----------
 
@@ -219,7 +278,7 @@ async function sendFilesTo(peerId, files) {
   await waitForOpen(channel);
 
   for (const file of files) {
-    await sendOneFile(channel, file);
+    await sendOneFile(channel, file, peerId);
   }
 }
 
@@ -230,7 +289,7 @@ function waitForOpen(channel) {
   });
 }
 
-function sendOneFile(channel, file) {
+function sendOneFile(channel, file, peerId) {
   return new Promise((resolve, reject) => {
     const row = addTransferRow(file.name, 'Sending…', 'active');
     channel.send(JSON.stringify({ type: 'file-start', name: file.name, size: file.size, mime: file.type }));
@@ -243,6 +302,13 @@ function sendOneFile(channel, file) {
       if (offset >= file.size) {
         channel.send(JSON.stringify({ type: 'file-end', name: file.name }));
         updateTransferRow(row, 100, 'Sent', 'done');
+        saveHistoryItem({
+          name: file.name,
+          size: file.size,
+          direction: 'sent',
+          peer: peers[peerId] || 'device',
+          time: Date.now(),
+        });
         resolve();
         return;
       }
@@ -303,6 +369,13 @@ function handleIncomingMessage(peerId, data) {
       a.click();
       a.remove();
       updateTransferRow(buf.row, 100, 'Saved to Downloads', 'done');
+      saveHistoryItem({
+        name: buf.name,
+        size: buf.size,
+        direction: 'received',
+        peer: peers[peerId] || 'device',
+        time: Date.now(),
+      });
       delete incomingBuffers[peerId];
     }
   } else {
