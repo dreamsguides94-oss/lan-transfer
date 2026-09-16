@@ -102,6 +102,28 @@ section h2 {
   letter-spacing: 0.01em;
 }
 
+.transfers-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.transfers-header h2 { margin: 0; }
+
+.clear-btn {
+  font-family: 'Inter', sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 0;
+  margin-bottom: 12px;
+}
+
+.clear-btn:hover { color: var(--danger); }
+
 /* ---------- connect panel ---------- */
 
 .connect-panel {
