@@ -7,7 +7,20 @@ const { exec } = require('child_process');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+
+// CORS is enabled so this same backend can also power the WordPress
+// theme version of the app (a different origin) without breaking the
+// original single-origin site. It only carries small signaling
+// messages/JSON — the actual files travel browser-to-browser via WebRTC,
+// never through this server — so allowing any origin here is safe.
+const io = new Server(server, {
+  cors: { origin: '*', methods: ['GET', 'POST'] },
+});
+
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  next();
+});
 
 // needed so req.ip / x-forwarded-for reflect the real visitor when this
 // runs behind a hosting provider's proxy (Render, Railway, Fly.io, etc.)
@@ -35,15 +48,24 @@ function openBrowser(url) {
   exec(cmd, () => {}); // best-effort; ignore failures (e.g. headless servers)
 }
 
-// Works two ways:
-//  - run locally (e.g. via the .bat launcher): returns this machine's LAN
-//    IP, so a QR/link on the page opens correctly on another device on
-//    the same Wi-Fi.
-//  - deployed publicly (Render/Railway/etc.): returns the public URL the
-//    visitor actually used, from the request itself.
+// Returns the link + QR code to show in the "connect another device"
+// panel. Three ways this gets used:
+//  - run locally (e.g. via the .bat launcher): returns this machine's
+//    LAN IP, so a QR/link on the page opens correctly on another device
+//    on the same Wi-Fi.
+//  - deployed publicly as its own site (Render/Railway/etc.): returns the
+//    public URL the visitor actually used, from the request itself.
+//  - embedded in the WordPress theme: the theme's JS passes ?url=<the
+//    WordPress page's own address> so the QR/link point people to that
+//    page instead of to this backend directly.
 app.get('/api/network-info', async (req, res) => {
-  const isLocalHost = /^(localhost|127\.0\.0\.1|::1)/.test(req.hostname);
-  const url = isLocalHost ? getLanAddress(PORT) : `${req.protocol}://${req.get('host')}`;
+  let url;
+  if (req.query.url) {
+    url = req.query.url;
+  } else {
+    const isLocalHost = /^(localhost|127\.0\.0\.1|::1)/.test(req.hostname);
+    url = isLocalHost ? getLanAddress(PORT) : `${req.protocol}://${req.get('host')}`;
+  }
   try {
     const qrDataUrl = await qrcode.toDataURL(url, { margin: 1, width: 220 });
     res.json({ url, qrDataUrl });
@@ -59,9 +81,9 @@ function randomName() {
   return ADJ[Math.floor(Math.random() * ADJ.length)] + ' ' + ANIMAL[Math.floor(Math.random() * ANIMAL.length)];
 }
 
-// Anyone can open this site — but for privacy, devices are only grouped
-// with others on the SAME network (same public IP), exactly like
-// Snapdrop. A stranger elsewhere on the internet never sees your devices.
+// By default, devices are only grouped with others on the SAME network
+// (same public IP) for privacy — exactly like Snapdrop. A stranger
+// elsewhere on the internet never sees your devices this way.
 function networkKeyFor(socket) {
   const forwarded = socket.handshake.headers['x-forwarded-for'];
   const ip = (forwarded ? forwarded.split(',')[0].trim() : socket.handshake.address) || 'local';
@@ -70,20 +92,52 @@ function networkKeyFor(socket) {
 
 const rooms = {}; // roomKey -> { socketId -> { id, name } }
 
-io.on('connection', (socket) => {
-  const room = networkKeyFor(socket);
-  const name = randomName();
+function joinRoom(socket, room, code) {
   rooms[room] = rooms[room] || {};
-  rooms[room][socket.id] = { id: socket.id, name };
+  rooms[room][socket.id] = { id: socket.id, name: socket.data.name };
   socket.join(room);
   socket.data.room = room;
 
-  // tell the new peer who's already here (on their network only)
-  socket.emit('welcome', { id: socket.id, name });
+  // tells the client whether it's on its home network room (code: null)
+  // or a manually-entered code room (code: 'AB3F9K') — the client uses
+  // this to reset its peer list/connections and update its UI
+  socket.emit('room-info', { code: code || null });
   socket.emit('peers', Object.values(rooms[room]).filter((p) => p.id !== socket.id));
-
-  // tell everyone else on the same network about the new peer
   socket.to(room).emit('peer-joined', rooms[room][socket.id]);
+}
+
+function leaveRoom(socket) {
+  const r = socket.data.room;
+  if (r && rooms[r]) {
+    delete rooms[r][socket.id];
+    if (Object.keys(rooms[r]).length === 0) delete rooms[r];
+    socket.to(r).emit('peer-left', { id: socket.id });
+  }
+  if (r) socket.leave(r);
+}
+
+io.on('connection', (socket) => {
+  socket.data.name = randomName();
+  socket.data.networkRoom = networkKeyFor(socket);
+
+  // tell the new peer their own id/name once, up front
+  socket.emit('welcome', { id: socket.id, name: socket.data.name });
+
+  joinRoom(socket, socket.data.networkRoom);
+
+  // manually pair with a device on a DIFFERENT network, via a shared code
+  socket.on('join-code', (rawCode) => {
+    const code = String(rawCode || '').trim().toUpperCase().slice(0, 12);
+    if (!code) return;
+    leaveRoom(socket);
+    joinRoom(socket, 'code-' + code, code);
+  });
+
+  // return to normal same-network discovery
+  socket.on('leave-code', () => {
+    leaveRoom(socket);
+    joinRoom(socket, socket.data.networkRoom);
+  });
 
   // relay WebRTC signaling messages (offer/answer/ICE candidates) between
   // two specific peers — the server never sees file contents, only this
@@ -102,12 +156,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    const r = socket.data.room;
-    if (rooms[r]) {
-      delete rooms[r][socket.id];
-      if (Object.keys(rooms[r]).length === 0) delete rooms[r];
-    }
-    socket.to(r).emit('peer-left', { id: socket.id });
+    leaveRoom(socket);
   });
 });
 
