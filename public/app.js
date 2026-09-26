@@ -19,6 +19,14 @@ const incomingText = document.getElementById('incomingText');
 const acceptBtn = document.getElementById('acceptBtn');
 const declineBtn = document.getElementById('declineBtn');
 const clearHistoryBtn = document.getElementById('clearHistoryBtn');
+const roomCodeInput = document.getElementById('roomCodeInput');
+const joinCodeBtn = document.getElementById('joinCodeBtn');
+const createCodeBtn = document.getElementById('createCodeBtn');
+const roomCodeDefault = document.getElementById('roomCodeDefault');
+const roomCodeActive = document.getElementById('roomCodeActive');
+const activeCodeText = document.getElementById('activeCodeText');
+const copyCodeBtn = document.getElementById('copyCodeBtn');
+const leaveCodeBtn = document.getElementById('leaveCodeBtn');
 
 const CHUNK_SIZE = 64 * 1024;
 const BUFFER_LOW_THRESHOLD = 1 * 1024 * 1024;
@@ -135,6 +143,68 @@ socket.on('peer-left', ({ id }) => {
   delete connections[id];
   delete channels[id];
   renderPeers();
+});
+
+// ---------- cross-network room codes ----------
+
+function generateCode() {
+  const chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // no 0/O/1/I — easy to read aloud
+  let code = '';
+  for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
+  return code;
+}
+
+function resetPeerState() {
+  Object.values(connections).forEach((pc) => {
+    try { pc.close(); } catch (e) { /* already closed */ }
+  });
+  Object.keys(connections).forEach((k) => delete connections[k]);
+  Object.keys(channels).forEach((k) => delete channels[k]);
+  Object.keys(peers).forEach((k) => delete peers[k]);
+  pendingFiles = [];
+  renderPeers();
+}
+
+socket.on('room-info', ({ code }) => {
+  // switching rooms means a whole new set of peers — drop anything tied
+  // to the previous room before the fresh peer list arrives
+  resetPeerState();
+
+  if (code) {
+    activeCodeText.textContent = code;
+    roomCodeDefault.classList.add('hidden');
+    roomCodeActive.classList.remove('hidden');
+  } else {
+    roomCodeDefault.classList.remove('hidden');
+    roomCodeActive.classList.add('hidden');
+  }
+});
+
+joinCodeBtn.addEventListener('click', () => {
+  const code = roomCodeInput.value.trim();
+  if (!code) return;
+  socket.emit('join-code', code);
+  roomCodeInput.value = '';
+});
+
+roomCodeInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') joinCodeBtn.click();
+});
+
+createCodeBtn.addEventListener('click', () => {
+  socket.emit('join-code', generateCode());
+});
+
+leaveCodeBtn.addEventListener('click', () => {
+  socket.emit('leave-code');
+});
+
+copyCodeBtn.addEventListener('click', () => {
+  navigator.clipboard.writeText(activeCodeText.textContent).then(() => {
+    const original = copyCodeBtn.textContent;
+    copyCodeBtn.textContent = 'Copied';
+    setTimeout(() => (copyCodeBtn.textContent = original), 1500);
+  });
 });
 
 socket.on('transfer-request', ({ from, meta }) => {
