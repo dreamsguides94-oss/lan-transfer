@@ -32,6 +32,26 @@
         <img id="qrImage" class="qr-image" alt="QR code to open this app on another device" />
       </section>
 
+      <section class="code-panel">
+        <h2>Connect across networks</h2>
+        <div id="roomCodeDefault">
+          <p class="connect-hint">Different Wi-Fi than the other device? Enter their code, or create one to share.</p>
+          <div class="code-row">
+            <input type="text" id="roomCodeInput" placeholder="Enter code" maxlength="8" />
+            <button id="joinCodeBtn" class="copy-btn">Join</button>
+          </div>
+          <button id="createCodeBtn" class="clear-btn">or create a new code</button>
+        </div>
+        <div id="roomCodeActive" class="hidden">
+          <p class="connect-hint">Connected using code — share it with the other device:</p>
+          <div class="code-row">
+            <code id="activeCodeText"></code>
+            <button id="copyCodeBtn" class="copy-btn" title="Copy code">Copy</button>
+          </div>
+          <button id="leaveCodeBtn" class="clear-btn">Back to my Wi-Fi network</button>
+        </div>
+      </section>
+
       <section id="dropzone" class="dropzone">
         <p>Drag &amp; drop files here, or click to choose</p>
         <input type="file" id="fileInput" multiple hidden />
