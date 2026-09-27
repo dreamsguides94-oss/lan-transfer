@@ -27,6 +27,9 @@ const roomCodeActive = document.getElementById('roomCodeActive');
 const activeCodeText = document.getElementById('activeCodeText');
 const copyCodeBtn = document.getElementById('copyCodeBtn');
 const leaveCodeBtn = document.getElementById('leaveCodeBtn');
+const chatMessagesEl = document.getElementById('chatMessages');
+const chatInput = document.getElementById('chatInput');
+const chatSendBtn = document.getElementById('chatSendBtn');
 
 const CHUNK_SIZE = 64 * 1024;
 const BUFFER_LOW_THRESHOLD = 1 * 1024 * 1024;
@@ -72,7 +75,6 @@ function historyStatusText(item) {
 
 function renderHistoryOnLoad() {
   const history = loadHistory();
-  // oldest first, so the newest ends up on top (addTransferRow prepends)
   history
     .slice()
     .reverse()
@@ -166,9 +168,8 @@ function resetPeerState() {
 }
 
 socket.on('room-info', ({ code }) => {
-  // switching rooms means a whole new set of peers — drop anything tied
-  // to the previous room before the fresh peer list arrives
   resetPeerState();
+  chatMessagesEl.innerHTML = '<p class="empty-state">No messages yet</p>';
 
   if (code) {
     activeCodeText.textContent = code;
@@ -205,6 +206,40 @@ copyCodeBtn.addEventListener('click', () => {
     copyCodeBtn.textContent = 'Copied';
     setTimeout(() => (copyCodeBtn.textContent = original), 1500);
   });
+});
+
+// ---------- chat (private to whoever is in the current room) ----------
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function addChatMessage(name, text, isOwn) {
+  if (chatMessagesEl.querySelector('.empty-state')) chatMessagesEl.innerHTML = '';
+  const div = document.createElement('div');
+  div.className = 'chat-bubble ' + (isOwn ? 'mine' : 'theirs');
+  div.innerHTML = `${isOwn ? '' : `<span class="sender">${escapeHtml(name)}</span>`}${escapeHtml(text)}`;
+  chatMessagesEl.appendChild(div);
+  chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+}
+
+function sendChatMessage() {
+  const text = chatInput.value.trim();
+  if (!text) return;
+  socket.emit('chat-message', { text });
+  addChatMessage(myName, text, true);
+  chatInput.value = '';
+}
+
+chatSendBtn.addEventListener('click', sendChatMessage);
+chatInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') sendChatMessage();
+});
+
+socket.on('chat-message', ({ name, text }) => {
+  addChatMessage(name, text, false);
 });
 
 socket.on('transfer-request', ({ from, meta }) => {
@@ -290,7 +325,6 @@ function setupChannel(channel, peerId) {
 
 // ---------- sending ----------
 
-// tracks bytes-over-time to show a live "x MB/s" readout during a transfer
 function createSpeedTracker() {
   let lastTime = performance.now();
   let lastBytes = 0;
