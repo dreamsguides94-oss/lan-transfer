@@ -139,6 +139,18 @@ io.on('connection', (socket) => {
     joinRoom(socket, socket.data.networkRoom);
   });
 
+  // simple text chat, scoped to whichever room this device is currently
+  // in (same-network group, or a joined code) — never leaves that group
+  socket.on('chat-message', ({ text }) => {
+    const clean = String(text || '').slice(0, 500).trim();
+    if (!clean || !socket.data.room) return;
+    socket.to(socket.data.room).emit('chat-message', {
+      name: socket.data.name,
+      text: clean,
+      time: Date.now(),
+    });
+  });
+
   // relay WebRTC signaling messages (offer/answer/ICE candidates) between
   // two specific peers — the server never sees file contents, only this
   // handshake metadata.
